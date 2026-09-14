@@ -1,0 +1,1166 @@
+import { useEffect, useState } from 'react'
+import { supabase } from '../lib/supabase'
+import { useAuth } from '../context/AuthContext'
+import Layout from '../components/Layout'
+import Modal from '../components/Modal'
+import ConfirmDialog from '../components/ConfirmDialog'
+import OTPVerify from '../components/OTPVerify'
+import UndoToast from '../components/UndoToast'
+import { logActivity } from '../lib/activityLogger'
+import { drawBrandedHeaderNarrow, drawSignatureAndStampNarrow, estimateNarrowReceiptHeight } from '../lib/pdfBranding'
+import * as XLSX from 'xlsx'
+import jsPDF from 'jspdf'
+import autoTable from 'jspdf-autotable'
+
+export default function Sales() {
+  const { profile } = useAuth()
+  const showProfit = profile?.show_profit === true
+  const [sales, setSales] = useState([])
+  const [products, setProducts] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [showModal, setShowModal] = useState(false)
+  const [showConfirm, setShowConfirm] = useState(false)
+  const [showReceipt, setShowReceipt] = useState(false)
+  const [showExportModal, setShowExportModal] = useState(false)
+  const [showOTP, setShowOTP] = useState(false)
+  const [otpAction, setOtpAction] = useState('')
+  const [exportType, setExportType] = useState('')
+  const [exportFrom, setExportFrom] = useState('')
+  const [exportTo, setExportTo] = useState('')
+  const [selectedSale, setSelectedSale] = useState(null)
+  const [pendingEditSale, setPendingEditSale] = useState(null)
+  const [receiptSale, setReceiptSale] = useState(null)
+  const [receiptItems, setReceiptItems] = useState([])
+  const [search, setSearch] = useState('')
+  const getMonthStart = () => {
+    const d = new Date()
+    return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split('T')[0]
+  }
+  const getMonthEnd = () => {
+    const d = new Date()
+    return new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().split('T')[0]
+  }
+  const [dateFrom, setDateFrom] = useState(getMonthStart())
+  const [dateTo, setDateTo] = useState(getMonthEnd())
+  const [customerName, setCustomerName] = useState('')
+  const [paymentMethod, setPaymentMethod] = useState('cash')
+  const [saleDate, setSaleDate] = useState(new Date().toISOString().split('T')[0])
+  const [saleItems, setSaleItems] = useState([{ product_id: '', product_name: '', quantity_sold: '', selling_price: '', buying_price: '', total: 0, is_consignment: false }])
+const [extraFees, setExtraFees] = useState('')
+  const [amountPaidNow, setAmountPaidNow] = useState('')
+const [productSearch, setProductSearch] = useState({})
+const [showProductDropdown, setShowProductDropdown] = useState({})
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [pendingDelete, setPendingDelete] = useState(null)
+  const [showUndoToast, setShowUndoToast] = useState(false)
+  const [saleItemsBySale, setSaleItemsBySale] = useState({})
+
+  useEffect(() => {
+    if (profile?.id) {
+      fetchSales()
+      fetchProducts()
+      fetchAllSaleItems()
+    }
+  }, [profile])
+
+  const fetchAllSaleItems = async () => {
+    const { data } = await supabase
+      .from('sale_items')
+      .select('*')
+      .eq('user_id', profile.id)
+    const grouped = {}
+    ;(data || []).forEach(item => {
+      if (!grouped[item.sale_id]) grouped[item.sale_id] = []
+      grouped[item.sale_id].push(item)
+    })
+    setSaleItemsBySale(grouped)
+  }
+
+  const fetchSales = async () => {
+    setLoading(true)
+    const { data } = await supabase
+      .from('sales')
+      .select('*')
+      .eq('user_id', profile.id)
+      .order('created_at', { ascending: false })
+    setSales(data || [])
+    setLoading(false)
+  }
+
+  const fetchProducts = async () => {
+    const { data } = await supabase
+      .from('products')
+      .select('*')
+      .eq('user_id', profile.id)
+    setProducts(data || [])
+  }
+
+  const openAdd = () => {
+    setSelectedSale(null)
+    setPendingEditSale(null)
+    setCustomerName('')
+    setPaymentMethod('cash')
+    setSaleDate(new Date().toISOString().split('T')[0])
+    setSaleItems([{ product_id: '', product_name: '', quantity_sold: '', selling_price: '', buying_price: '', total: 0, is_consignment: false }])
+    setExtraFees('')
+    setAmountPaidNow('')
+    setError('')
+    setShowModal(true)
+  }
+
+  const openEdit = async (sale) => {
+    setSelectedSale(sale)
+    setPendingEditSale(sale)
+    setCustomerName(sale.product_name)
+    setPaymentMethod(sale.payment_method || 'cash')
+    setSaleDate(sale.created_at ? sale.created_at.split('T')[0] : new Date().toISOString().split('T')[0])
+    setExtraFees(sale.extra_fees ? String(sale.extra_fees) : '')
+    setAmountPaidNow(sale.amount_paid ? String(sale.amount_paid) : '')
+    setError('')
+
+    const { data: existingItems } = await supabase
+      .from('sale_items')
+      .select('*')
+      .eq('sale_id', sale.id)
+
+    if (existingItems && existingItems.length > 0) {
+      setSaleItems(existingItems.map(item => ({
+        product_id: item.product_id || '',
+        product_name: item.product_name,
+        quantity_sold: item.quantity_sold,
+        selling_price: item.selling_price,
+        buying_price: item.buying_price || '',
+        total: item.total,
+        is_consignment: item.is_consignment || false,
+      })))
+    } else {
+      setSaleItems([{ product_id: '', product_name: '', quantity_sold: '', selling_price: '', buying_price: '', total: 0, is_consignment: false }])
+    }
+
+    setShowModal(true)
+  }
+
+  const openDelete = (sale) => {
+    setSelectedSale(sale)
+    setShowConfirm(true)
+  }
+
+  const handleProductChange = (index, productId) => {
+    const product = products.find(p => p.id === productId)
+    const updated = [...saleItems]
+    if (product) {
+      updated[index] = {
+        ...updated[index],
+        product_id: productId,
+        product_name: product.name,
+        selling_price: product.selling_price,
+        buying_price: product.buying_price || '',
+        total: product.selling_price * (parseInt(updated[index].quantity_sold) || 0)
+      }
+    }
+    setSaleItems(updated)
+  }
+
+  const handleQuantityChange = (index, qty) => {
+    const updated = [...saleItems]
+    const price = parseInt(updated[index].selling_price) || 0
+    updated[index] = { ...updated[index], quantity_sold: qty, total: price * (parseInt(qty) || 0) }
+    setSaleItems(updated)
+  }
+
+  const handlePriceChange = (index, price) => {
+    const updated = [...saleItems]
+    const qty = parseInt(updated[index].quantity_sold) || 0
+    updated[index] = { ...updated[index], selling_price: price, total: parseInt(price) * qty }
+    setSaleItems(updated)
+  }
+  const handleBuyingPriceChange = (index, price) => {
+    const updated = [...saleItems]
+    updated[index] = { ...updated[index], buying_price: price }
+    setSaleItems(updated)
+  }
+
+  const handleToggleConsignment = (index) => {
+    const updated = [...saleItems]
+    const goingConsignment = !updated[index].is_consignment
+    updated[index] = {
+      ...updated[index],
+      is_consignment: goingConsignment,
+      product_id: goingConsignment ? '' : updated[index].product_id,
+      product_name: goingConsignment ? '' : updated[index].product_name,
+      buying_price: goingConsignment ? '' : updated[index].buying_price,
+    }
+    setSaleItems(updated)
+  }
+
+  const handleConsignmentNameChange = (index, name) => {
+    const updated = [...saleItems]
+    updated[index] = { ...updated[index], product_name: name }
+    setSaleItems(updated)
+  }
+
+  const addItem = () => {
+    setSaleItems([...saleItems, { product_id: '', product_name: '', quantity_sold: '', selling_price: '', buying_price: '', total: 0, is_consignment: false }])
+  }
+
+  const removeItem = (index) => {
+    if (saleItems.length === 1) return
+    setSaleItems(saleItems.filter((_, i) => i !== index))
+  }
+
+  const grandTotal = saleItems.reduce((sum, item) => sum + (item.total || 0), 0)
+  const totalProfit = saleItems.reduce((sum, item) => {
+    const qty = parseInt(item.quantity_sold) || 0
+    const sellPrice = parseInt(item.selling_price) || 0
+    const buyPrice = parseInt(item.buying_price) || 0
+    return sum + ((sellPrice - buyPrice) * qty)
+  }, 0) - (parseInt(extraFees) || 0)
+
+  const handleSave = async (saleToEdit = null) => {
+    const editSale = saleToEdit || pendingEditSale || selectedSale
+
+    if (!customerName) {
+      setError('Customer name is required')
+      return
+    }
+    const validItems = saleItems.filter(i =>
+      (i.is_consignment ? i.product_name : i.product_id) && i.quantity_sold && i.selling_price
+    )
+    if (validItems.length === 0) {
+      setError('Please add at least one product')
+      return
+    }
+
+    setSaving(true)
+    setError('')
+
+    const paidNow = parseInt(amountPaidNow) || 0
+    const paymentStatus = paymentMethod !== 'credit'
+      ? 'paid'
+      : paidNow >= grandTotal ? 'paid' : paidNow > 0 ? 'partial' : 'pending'
+    const amountPaidValue = paymentMethod === 'credit' ? Math.min(paidNow, grandTotal) : grandTotal
+
+    let saleData, saleError
+
+    if (editSale) {
+      const { data: oldItems } = await supabase
+        .from('sale_items')
+        .select('product_id, quantity_sold, is_consignment')
+        .eq('sale_id', editSale.id)
+
+      const { data, error } = await supabase
+        .from('sales')
+        .update({
+          product_name: customerName,
+          quantity_sold: validItems.reduce((sum, i) => sum + parseInt(i.quantity_sold), 0),
+          total: grandTotal,
+          payment_method: paymentMethod,
+          payment_status: paymentStatus,
+          amount_paid: amountPaidValue,
+        })
+        .eq('id', editSale.id)
+        .select()
+        .single()
+      saleData = data
+      saleError = error
+
+      if (!saleError && saleData) {
+        if (saleDate !== editSale.created_at?.split('T')[0]) {
+          await supabase.from('sales').update({ created_at: saleDate }).eq('id', editSale.id)
+        }
+
+        for (const oldItem of oldItems || []) {
+          if (oldItem.is_consignment) continue
+          const { data: freshProduct } = await supabase
+            .from('products')
+            .select('quantity')
+            .eq('id', oldItem.product_id)
+            .single()
+          if (freshProduct) {
+            await supabase
+              .from('products')
+              .update({ quantity: freshProduct.quantity + parseInt(oldItem.quantity_sold) })
+              .eq('id', oldItem.product_id)
+          }
+        }
+
+        await supabase.from('sale_items').delete().eq('sale_id', editSale.id)
+        const itemsToInsert = validItems.map(item => ({
+          sale_id: editSale.id,
+          user_id: profile.id,
+          product_id: item.is_consignment ? null : item.product_id,
+          product_name: item.product_name,
+          quantity_sold: parseInt(item.quantity_sold),
+          selling_price: parseInt(item.selling_price),
+          buying_price: parseInt(item.buying_price) || 0,
+          total: item.total,
+          is_consignment: !!item.is_consignment,
+        }))
+        await supabase.from('sale_items').insert(itemsToInsert)
+
+        for (const item of validItems) {
+          if (item.is_consignment) continue
+          const { data: freshProduct } = await supabase
+            .from('products')
+            .select('quantity')
+            .eq('id', item.product_id)
+            .single()
+          if (freshProduct) {
+            await supabase
+              .from('products')
+              .update({ quantity: freshProduct.quantity - parseInt(item.quantity_sold) })
+              .eq('id', item.product_id)
+          }
+        }
+
+        if (showProfit) {
+          await supabase.from('sales').update({
+            extra_fees: parseInt(extraFees) || 0,
+            profit: totalProfit,
+          }).eq('id', saleData.id)
+        }
+
+        await supabase.from('credits_given').delete().eq('sale_id', editSale.id)
+        if (paymentMethod === 'credit') {
+          const paidRatio = grandTotal > 0 ? Math.min(paidNow / grandTotal, 1) : 0
+          for (const item of validItems) {
+            const itemPaid = Math.round(item.total * paidRatio)
+            await supabase.from('credits_given').insert({
+              user_id: profile.id,
+              customer_name: customerName,
+              product_name: item.product_name,
+              quantity: parseInt(item.quantity_sold),
+              amount: item.total,
+              paid_amount: itemPaid,
+              date: saleDate,
+              notes: 'Auto-added from sale on credit',
+              status: itemPaid >= item.total ? 'paid' : itemPaid > 0 ? 'partial' : 'unpaid',
+              sale_id: saleData.id,
+            })
+          }
+        }
+      }
+    } else {
+      const { data, error } = await supabase
+        .from('sales')
+        .insert({
+          user_id: profile.id,
+          product_name: customerName,
+          quantity_sold: validItems.reduce((sum, i) => sum + parseInt(i.quantity_sold), 0),
+          selling_price: 0,
+          total: grandTotal,
+          payment_method: paymentMethod,
+          payment_status: paymentStatus,
+          amount_paid: amountPaidValue,
+        })
+        .select()
+        .single()
+      saleData = data
+      saleError = error
+
+      if (!saleError && saleData) {
+        if (saleDate !== new Date().toISOString().split('T')[0]) {
+          await supabase.from('sales').update({ created_at: saleDate }).eq('id', saleData.id)
+        }
+
+        const itemsToInsert = validItems.map(item => ({
+          sale_id: saleData.id,
+          user_id: profile.id,
+          product_id: item.is_consignment ? null : item.product_id,
+          product_name: item.product_name,
+          quantity_sold: parseInt(item.quantity_sold),
+          selling_price: parseInt(item.selling_price),
+          buying_price: parseInt(item.buying_price) || 0,
+          total: item.total,
+          is_consignment: !!item.is_consignment,
+        }))
+        await supabase.from('sale_items').insert(itemsToInsert)
+
+        if (showProfit) {
+          await supabase.from('sales').update({
+            extra_fees: parseInt(extraFees) || 0,
+            profit: totalProfit,
+          }).eq('id', saleData.id)
+        }
+
+        for (const item of validItems) {
+          if (item.is_consignment) continue
+          const { data: freshProduct } = await supabase
+            .from('products')
+            .select('quantity')
+            .eq('id', item.product_id)
+            .single()
+          if (freshProduct) {
+            await supabase
+              .from('products')
+              .update({ quantity: freshProduct.quantity - parseInt(item.quantity_sold) })
+              .eq('id', item.product_id)
+          }
+        }
+
+        if (paymentMethod === 'credit') {
+          const paidRatio = grandTotal > 0 ? Math.min(paidNow / grandTotal, 1) : 0
+          for (const item of validItems) {
+            const itemPaid = Math.round(item.total * paidRatio)
+            await supabase.from('credits_given').insert({
+              user_id: profile.id,
+              customer_name: customerName,
+              product_name: item.product_name,
+              quantity: parseInt(item.quantity_sold),
+              amount: item.total,
+              paid_amount: itemPaid,
+              date: saleDate,
+              notes: 'Auto-added from sale on credit',
+              status: itemPaid >= item.total ? 'paid' : itemPaid > 0 ? 'partial' : 'unpaid',
+              sale_id: saleData.id,
+            })
+          }
+        }
+      }
+    }
+
+    if (saleError) {
+      setError('Failed to save sale: ' + saleError.message)
+      setSaving(false)
+      return
+    }
+
+    await logActivity(
+      profile.id,
+      profile.email,
+      profile.full_name,
+      editSale ? 'Edit Sale' : 'Add Sale',
+      `${editSale ? 'Updated' : 'Added'} sale for: ${customerName} - RWF ${grandTotal.toLocaleString()} - Payment: ${paymentMethod}`
+    )
+
+    setSaving(false)
+    setShowModal(false)
+    setShowOTP(false)
+    setSelectedSale(null)
+    setPendingEditSale(null)
+    fetchSales()
+    fetchAllSaleItems()
+    fetchProducts()
+  }
+
+  const handleDelete = async () => {
+    setShowConfirm(false)
+    setPendingDelete(selectedSale)
+    setShowUndoToast(true)
+  }
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return
+
+    try {
+      const { data: items } = await supabase
+        .from('sale_items')
+        .select('*')
+        .eq('sale_id', pendingDelete.id)
+
+      await supabase
+        .from('quotations')
+        .update({ sale_id: null, status: 'pending' })
+        .eq('sale_id', pendingDelete.id)
+
+      const { error: deleteSaleError } = await supabase
+        .from('sales')
+        .delete()
+        .eq('id', pendingDelete.id)
+
+      if (deleteSaleError) {
+        alert('Could not delete this sale:\n\n' + deleteSaleError.message)
+        setPendingDelete(null)
+        setShowUndoToast(false)
+        return
+      }
+
+      await supabase.from('sale_items').delete().eq('sale_id', pendingDelete.id)
+
+      if (items && items.length > 0) {
+        for (const item of items) {
+          if (item.is_consignment) continue
+          const { data: freshProduct } = await supabase
+            .from('products')
+            .select('quantity')
+            .eq('id', item.product_id)
+            .single()
+          if (freshProduct) {
+            await supabase
+              .from('products')
+              .update({ quantity: freshProduct.quantity + item.quantity_sold })
+              .eq('id', item.product_id)
+          }
+        }
+      }
+
+      await logActivity(
+        profile.id,
+        profile.email,
+        profile.full_name,
+        'Delete Sale',
+        `Deleted sale for: ${pendingDelete.product_name} - RWF ${pendingDelete.total?.toLocaleString()}`
+      )
+
+      setPendingDelete(null)
+      setShowUndoToast(false)
+      fetchSales()
+      fetchAllSaleItems()
+      fetchProducts()
+    } catch (err) {
+      alert('Unexpected error deleting sale:\n\n' + (err?.message || String(err)))
+      setPendingDelete(null)
+      setShowUndoToast(false)
+    }
+  }
+
+  const handleUndo = () => {
+    setPendingDelete(null)
+    setShowUndoToast(false)
+  }
+
+  const generateReceipt = async (sale) => {
+    const { data: items } = await supabase
+      .from('sale_items')
+      .select('*')
+      .eq('sale_id', sale.id)
+    setReceiptSale(sale)
+    setReceiptItems(items || [])
+    setShowReceipt(true)
+  }
+
+  const printReceipt = async () => {
+    // Page height is calculated from the actual number of items, so a receipt
+    // with many products never gets silently truncated at a fixed 200mm.
+    const pageHeight = estimateNarrowReceiptHeight(profile, receiptItems.length)
+    const doc = new jsPDF({ format: [80, pageHeight], unit: 'mm' })
+
+    // Branded header (logo + company name/location/phone/TIN), height varies
+    // depending on whether a logo is set — headerEndY tracks where to continue.
+    let y = await drawBrandedHeaderNarrow(doc, profile)
+
+    doc.text('Sales Receipt', 40, y, { align: 'center' })
+    y += 4
+    doc.text('--------------------------------', 40, y, { align: 'center' })
+    y += 6
+    doc.text(`Date: ${new Date(receiptSale.created_at).toLocaleDateString()}`, 5, y)
+    y += 6
+    doc.text(`Customer: ${receiptSale.product_name}`, 5, y)
+    y += 6
+    const paymentLabel = receiptSale.payment_method === 'mtn' ? 'MTN Mobile Money' :
+      receiptSale.payment_method === 'bank' ? 'Bank Transfer' :
+      receiptSale.payment_method === 'cheque' ? 'Cheque' :
+      receiptSale.payment_method === 'credit' ? 'Credit' : 'Cash'
+    const statusLabel = receiptSale.payment_status === 'pending' ? 'Pending' :
+      receiptSale.payment_status === 'partial' ? `Partial — Paid RWF ${(receiptSale.amount_paid || 0).toLocaleString()}, Balance RWF ${(receiptSale.total - (receiptSale.amount_paid || 0)).toLocaleString()}` :
+      'Paid'
+    doc.text(`Payment: ${paymentLabel} (${statusLabel})`, 5, y)
+    y += 4
+    doc.text('--------------------------------', 40, y, { align: 'center' })
+    y += 6
+
+    receiptItems.forEach((item, i) => {
+      doc.text(`${i + 1}. ${item.product_name}`, 5, y)
+      doc.text(`   Qty: ${item.quantity_sold} x RWF ${item.selling_price?.toLocaleString()}`, 5, y + 5)
+      doc.text(`   Total: RWF ${item.total?.toLocaleString()}`, 5, y + 10)
+      y += 16
+    })
+
+    doc.text('--------------------------------', 40, y, { align: 'center' })
+    doc.setFontSize(11)
+    doc.text(`GRAND TOTAL: RWF ${receiptSale.total?.toLocaleString()}`, 40, y + 7, { align: 'center' })
+    let footerY = y + 7
+
+    if (showProfit && (receiptSale.extra_fees || receiptSale.profit !== undefined)) {
+      doc.setFontSize(8)
+      if (receiptSale.extra_fees) {
+        footerY += 6
+        doc.text(`Extra Fees: -RWF ${receiptSale.extra_fees.toLocaleString()}`, 40, footerY, { align: 'center' })
+        footerY += 5
+        doc.text(`Remaining: RWF ${(receiptSale.total - receiptSale.extra_fees).toLocaleString()}`, 40, footerY, { align: 'center' })
+      }
+      if (receiptSale.profit !== undefined && receiptSale.profit !== null) {
+        footerY += 5
+        doc.text(`Profit Made: RWF ${receiptSale.profit.toLocaleString()}`, 40, footerY, { align: 'center' })
+      }
+    }
+
+    // Signature (left) + Stamp (right), then the thank-you footer below them
+    footerY = await drawSignatureAndStampNarrow(doc, profile, footerY + 4)
+
+    doc.setFontSize(8)
+    doc.text('Thank you for your business!', 40, footerY, { align: 'center' })
+    doc.text('Powered by KoraBiz', 40, footerY + 5, { align: 'center' })
+    doc.save(`Receipt_${receiptSale.product_name}_${new Date(receiptSale.created_at).toLocaleDateString()}.pdf`)
+  }
+
+  const handleExport = () => {
+    const exportFiltered = sales.filter(s => {
+      const d = new Date(s.created_at)
+      const from = exportFrom ? d >= new Date(exportFrom) : true
+      const to = exportTo ? d <= new Date(exportTo + 'T23:59:59') : true
+      return from && to
+    })
+    const exportRevenue = exportFiltered.reduce((sum, s) => sum + (s.total || 0), 0)
+
+    if (exportType === 'excel') {
+      const data = exportFiltered.map(s => ({
+        Customer: s.product_name,
+        'Total (RWF)': s.total,
+        Payment: s.payment_method || 'cash',
+        Date: new Date(s.created_at).toLocaleDateString(),
+      }))
+      const ws = XLSX.utils.json_to_sheet(data)
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, 'Sales')
+      XLSX.writeFile(wb, `KoraBiz_Sales_${exportFrom || 'all'}_to_${exportTo || 'all'}.xlsx`)
+    } else {
+      const doc = new jsPDF()
+      doc.setFontSize(16)
+      doc.text(profile?.company_name || 'KoraBiz Management System', 14, 15)
+      doc.setFontSize(12)
+      doc.text('Sales Report', 14, 25)
+      doc.setFontSize(10)
+      doc.text(`Generated: ${new Date().toLocaleDateString()}`, 14, 32)
+      doc.text(`Total Revenue: RWF ${exportRevenue.toLocaleString()}`, 14, 39)
+      autoTable(doc, {
+        startY: 48,
+        head: [['Customer', 'Total (RWF)', 'Payment', 'Date']],
+        body: exportFiltered.map(s => [
+          s.product_name,
+          s.total?.toLocaleString(),
+          s.payment_method || 'cash',
+          new Date(s.created_at).toLocaleDateString(),
+        ]),
+        styles: { fontSize: 9 },
+        headStyles: { fillColor: [29, 78, 216] },
+      })
+      doc.save(`KoraBiz_Sales_${exportFrom || 'all'}_to_${exportTo || 'all'}.pdf`)
+    }
+    setShowExportModal(false)
+    setExportFrom('')
+    setExportTo('')
+  }
+
+  const filtered = sales.filter(s => {
+    const items = saleItemsBySale[s.id] || []
+    const matchesCustomer = s.product_name?.toLowerCase().includes(search.toLowerCase())
+    const matchesProduct = items.some(i => i.product_name?.toLowerCase().includes(search.toLowerCase()))
+    const matchesSearch = matchesCustomer || matchesProduct
+    const d = new Date(s.created_at)
+    const from = dateFrom ? d >= new Date(dateFrom) : true
+    const to = dateTo ? d <= new Date(dateTo + 'T23:59:59') : true
+    return matchesSearch && from && to
+  })
+
+  const totalRevenue = filtered.reduce((sum, s) => sum + (s.total || 0), 0)
+
+  return (
+    <Layout>
+      <div className="p-6 space-y-6">
+
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-white">💰 Sales</h1>
+            <p className="text-gray-400 text-sm mt-1">Record and manage your sales</p>
+          </div>
+          <button onClick={openAdd} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium text-sm">
+            + Record Sale
+          </button>
+        </div>
+
+        <div className="flex flex-col sm:flex-row gap-3">
+          <input
+            type="text"
+            placeholder="Search by customer or product..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="bg-gray-900 border border-gray-700 text-white px-4 py-2 rounded-lg text-sm flex-1 focus:outline-none focus:border-blue-500"
+          />
+          <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="bg-gray-900 border border-gray-700 text-white px-4 py-2 rounded-lg text-sm focus:outline-none focus:border-blue-500" />
+          <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="bg-gray-900 border border-gray-700 text-white px-4 py-2 rounded-lg text-sm focus:outline-none focus:border-blue-500" />
+          <button
+            onClick={() => { setDateFrom(getMonthStart()); setDateTo(getMonthEnd()) }}
+            className="px-3 py-2 bg-gray-800 text-gray-300 hover:text-white rounded-lg text-sm transition whitespace-nowrap"
+          >
+            This Month
+          </button>
+          <button
+            onClick={() => { setDateFrom(''); setDateTo('') }}
+            className="px-3 py-2 bg-gray-800 text-gray-300 hover:text-white rounded-lg text-sm transition whitespace-nowrap"
+          >
+            All Time
+          </button>
+          <button onClick={() => { setExportType('excel'); setShowExportModal(true) }} className="px-4 py-2 bg-green-700 hover:bg-green-600 text-white rounded-lg text-sm transition font-medium">📊 Excel</button>
+          <button onClick={() => { setExportType('pdf'); setShowExportModal(true) }} className="px-4 py-2 bg-red-700 hover:bg-red-600 text-white rounded-lg text-sm transition font-medium">📄 PDF</button>
+        </div>
+
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex items-center justify-between">
+          <div>
+            <p className="text-gray-400 text-sm">Total Revenue {(dateFrom || dateTo) && <span className="text-gray-500 text-xs font-normal">(filtered)</span>}</p>
+            <p className="text-green-400 text-2xl font-bold">RWF {totalRevenue.toLocaleString()}</p>
+          </div>
+          <div className="text-right">
+            <p className="text-gray-400 text-sm">Total Sales {(dateFrom || dateTo) && <span className="text-gray-500 text-xs font-normal">(filtered)</span>}</p>
+            <p className="text-white text-2xl font-bold">{filtered.length}</p>
+          </div>
+        </div>
+
+        <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+          {loading ? (
+            <div className="text-center py-12"><p className="text-gray-400">Loading sales...</p></div>
+          ) : filtered.length === 0 ? (
+            <div className="text-center py-12">
+              <p className="text-gray-500 mb-3">No sales found</p>
+              <button onClick={openAdd} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition">Record First Sale</button>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-800">
+                  <tr>
+                    <th className="text-left text-gray-400 px-6 py-4 font-medium">Customer</th>
+                    <th className="text-left text-gray-400 px-6 py-4 font-medium">Total</th>
+                    <th className="text-left text-gray-400 px-6 py-4 font-medium">Payment</th>
+                    <th className="text-left text-gray-400 px-6 py-4 font-medium">Status</th>
+                    <th className="text-left text-gray-400 px-6 py-4 font-medium">Date</th>
+                    <th className="text-left text-gray-400 px-6 py-4 font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((sale) => (
+                    <tr key={sale.id} className="border-t border-gray-800 hover:bg-gray-800 transition">
+                      <td className="px-6 py-4 text-white font-medium">{sale.product_name}</td>
+                      <td className="px-6 py-4 text-green-400 font-medium">RWF {sale.total?.toLocaleString()}</td>
+                      <td className="px-6 py-4 text-gray-300 text-xs">
+                        {sale.payment_method === 'cash' ? '💵 Cash' :
+                         sale.payment_method === 'mtn' ? '📱 MTN' :
+                         sale.payment_method === 'bank' ? '🏦 Bank' :
+                         sale.payment_method === 'cheque' ? '📄 Cheque' :
+                         sale.payment_method === 'credit' ? '💳 Credit' : '💵 Cash'}
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                          sale.payment_status === 'paid' ? 'bg-green-900 text-green-300' :
+                          sale.payment_status === 'partial' ? 'bg-orange-900 text-orange-300' :
+                          sale.payment_status === 'pending' ? 'bg-yellow-900 text-yellow-300' :
+                          'bg-green-900 text-green-300'
+                        }`}>
+                          {sale.payment_status === 'pending' ? '⏳ Pending' :
+                           sale.payment_status === 'partial' ? '🟠 Partial' : '✅ Paid'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-gray-400">{new Date(sale.created_at).toLocaleDateString()}</td>
+                      <td className="px-6 py-4">
+                        <div className="flex gap-2">
+                          <button onClick={() => generateReceipt(sale)} className="px-3 py-1 bg-green-700 hover:bg-green-600 text-white rounded-lg text-xs transition">Receipt</button>
+                          <button onClick={() => openEdit(sale)} className="px-3 py-1 bg-blue-700 hover:bg-blue-600 text-white rounded-lg text-xs transition">Edit</button>
+                          <button onClick={() => openDelete(sale)} className="px-3 py-1 bg-red-700 hover:bg-red-600 text-white rounded-lg text-xs transition">Delete</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+      </div>
+
+      {showModal && (
+        <Modal title={pendingEditSale ? 'Edit Sale' : 'Record Sale'} onClose={() => { setShowModal(false); setSelectedSale(null); setPendingEditSale(null) }}>
+          <div className="space-y-4 max-h-96 overflow-y-auto pr-1">
+            {error && <p className="text-red-400 text-sm">{error}</p>}
+            <div>
+              <label className="text-gray-400 text-sm mb-1 block">Customer Name *</label>
+              <input
+                type="text"
+                value={customerName}
+                onChange={(e) => setCustomerName(e.target.value)}
+                className="w-full bg-gray-800 border border-gray-700 text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-blue-500"
+                placeholder="Customer name"
+              />
+            </div>
+            <div>
+              <label className="text-gray-400 text-sm mb-1 block">Sale Date</label>
+              <input
+                type="date"
+                value={saleDate}
+                onChange={(e) => setSaleDate(e.target.value)}
+                className="w-full bg-gray-800 border border-gray-700 text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-blue-500"
+              />
+            </div>
+            <div>
+              <label className="text-gray-400 text-sm mb-1 block">Payment Method</label>
+              <select
+                value={paymentMethod}
+                onChange={(e) => setPaymentMethod(e.target.value)}
+                className="w-full bg-gray-800 border border-gray-700 text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-blue-500"
+              >
+                <option value="cash">💵 Cash</option>
+                <option value="mtn">📱 MTN Mobile Money</option>
+                <option value="bank">🏦 Bank Transfer</option>
+                <option value="cheque">📄 Cheque</option>
+                <option value="credit">💳 Credit (Add to Credits Given)</option>
+              </select>
+            </div>
+            {paymentMethod === 'credit' && (
+              <div className="bg-yellow-900 border border-yellow-700 rounded-lg p-3 space-y-3">
+                <p className="text-yellow-300 text-xs">⚠️ Whatever isn't paid now will be added to Credits Given as owed.</p>
+                <div>
+                  <label className="text-yellow-200 text-xs mb-1 block">Amount Paid Now (leave blank if nothing was paid)</label>
+                  <input
+                    type="number"
+                    value={amountPaidNow}
+                    onChange={(e) => setAmountPaidNow(e.target.value)}
+                    className="w-full bg-gray-800 border border-yellow-700 text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-yellow-500"
+                    placeholder="0"
+                  />
+                </div>
+                {grandTotal > 0 && (
+                  <p className="text-yellow-200 text-xs">
+                    Balance remaining on credit: <span className="font-bold">RWF {Math.max(grandTotal - (parseInt(amountPaidNow) || 0), 0).toLocaleString()}</span>
+                  </p>
+                )}
+              </div>
+            )}
+            <div className="space-y-3">
+              <label className="text-gray-400 text-sm block">Products *</label>
+              {saleItems.map((item, index) => (
+                <div key={index} className="bg-gray-800 rounded-lg p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-400 text-xs">Item {index + 1}</span>
+                    {saleItems.length > 1 && (
+                      <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-300 text-xs">Remove</button>
+                    )}
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={!!item.is_consignment}
+                      onChange={() => handleToggleConsignment(index)}
+                      className="rounded"
+                    />
+                    <span className="text-gray-300 text-xs">🔄 Third-Party Item</span>
+                  </label>
+                  {item.is_consignment ? (
+                    <input
+                      type="text"
+                      value={item.product_name}
+                      onChange={(e) => handleConsignmentNameChange(index, e.target.value)}
+                      className="w-full bg-gray-700 border border-gray-600 text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-blue-500"
+                      placeholder="Product name (not in your inventory)"
+                    />
+                  ) : (
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={showProductDropdown[index] ? (productSearch[index] ?? '') : item.product_name}
+                        onChange={(e) => {
+                          setProductSearch({ ...productSearch, [index]: e.target.value })
+                          setShowProductDropdown({ ...showProductDropdown, [index]: true })
+                        }}
+                        onFocus={() => {
+                          setProductSearch({ ...productSearch, [index]: '' })
+                          setShowProductDropdown({ ...showProductDropdown, [index]: true })
+                        }}
+                        onBlur={() => setTimeout(() => setShowProductDropdown({ ...showProductDropdown, [index]: false }), 150)}
+                        className="w-full bg-gray-700 border border-gray-600 text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-blue-500"
+                        placeholder="🔍 Search your stock..."
+                      />
+                      {showProductDropdown[index] && (
+                        <div className="absolute z-20 w-full bg-gray-800 border border-gray-600 rounded-lg mt-1 max-h-48 overflow-y-auto shadow-xl">
+                          {products
+                            .filter(p => p.name?.toLowerCase().includes((productSearch[index] || '').toLowerCase()))
+                            .map(p => (
+                              <div
+                                key={p.id}
+                                onMouseDown={() => {
+                                  handleProductChange(index, p.id)
+                                  setProductSearch({ ...productSearch, [index]: '' })
+                                  setShowProductDropdown({ ...showProductDropdown, [index]: false })
+                                }}
+                                className="px-3 py-2 hover:bg-gray-700 cursor-pointer text-sm text-white border-b border-gray-700 last:border-0"
+                              >
+                                {p.name} <span className="text-gray-400">(Stock: {p.quantity})</span>
+                              </div>
+                            ))}
+                          {products.filter(p => p.name?.toLowerCase().includes((productSearch[index] || '').toLowerCase())).length === 0 && (
+                            <div className="px-3 py-2 text-gray-500 text-sm">No products found in your stock</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      type="number"
+                      value={item.quantity_sold}
+                      onChange={(e) => handleQuantityChange(index, e.target.value)}
+                      className="bg-gray-700 border border-gray-600 text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-blue-500"
+                      placeholder="Quantity"
+                    />
+                    <input
+                      type="number"
+                      value={item.selling_price}
+                      onChange={(e) => handlePriceChange(index, e.target.value)}
+                      className="bg-gray-700 border border-gray-600 text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-blue-500"
+                      placeholder="Selling Price (RWF)"
+                    />
+                  </div>
+                  {showProfit && (
+                    <input
+                      type="number"
+                      value={item.buying_price}
+                      onChange={(e) => handleBuyingPriceChange(index, e.target.value)}
+                      className="w-full bg-gray-700 border border-purple-600 text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-purple-500"
+                      placeholder={item.is_consignment ? "Amount you owe the owner (RWF)" : "Buying Price / Cost (RWF)"}
+                    />
+                  )}
+                  {item.total > 0 && (
+                    <p className="text-green-400 text-sm font-medium">Subtotal: RWF {item.total.toLocaleString()}</p>
+                  )}
+                </div>
+              ))}
+              <button onClick={addItem} className="w-full py-2 border border-dashed border-gray-600 text-gray-400 hover:text-white hover:border-gray-400 rounded-lg text-sm transition">
+                + Add Another Product
+              </button>
+            </div>
+            {showProfit && (
+              <div>
+                <label className="text-gray-400 text-sm mb-1 block">Extra Fees (RWF)</label>
+                <input
+                  type="number"
+                  value={extraFees}
+                  onChange={(e) => setExtraFees(e.target.value)}
+                  className="w-full bg-gray-800 border border-purple-600 text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-purple-500"
+                  placeholder="Transport, packaging, etc."
+                />
+              </div>
+            )}
+            {grandTotal > 0 && (
+              <div className="bg-gray-800 rounded-lg px-4 py-3">
+                <p className="text-gray-400 text-sm">Grand Total</p>
+                <p className="text-green-400 text-xl font-bold">RWF {grandTotal.toLocaleString()}</p>
+                {showProfit && (
+                  <>
+                    <p className="text-gray-400 text-sm mt-2">Estimated Profit</p>
+                    <p className={`text-lg font-bold ${totalProfit >= 0 ? 'text-purple-400' : 'text-red-400'}`}>
+                      RWF {totalProfit.toLocaleString()}
+                    </p>
+                  </>
+                )}
+              </div>
+            )}
+            <div className="flex gap-3 pt-2">
+              <button onClick={() => { setShowModal(false); setSelectedSale(null); setPendingEditSale(null) }} className="flex-1 py-2 bg-gray-800 text-gray-300 rounded-lg hover:bg-gray-700 transition">Cancel</button>
+              <button
+                onClick={() => {
+                  if (pendingEditSale) {
+                    setOtpAction('edit')
+                    setShowModal(false)
+                    setShowOTP(true)
+                  } else {
+                    handleSave()
+                  }
+                }}
+                disabled={saving}
+                className="flex-1 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium"
+              >
+                {saving ? 'Saving...' : pendingEditSale ? 'Update Sale' : 'Record Sale'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {showConfirm && !showOTP && (
+        <ConfirmDialog
+          message="Are you sure you want to delete this sale?"
+          onConfirm={() => { setShowConfirm(false); setOtpAction('delete'); setShowOTP(true) }}
+          onCancel={() => setShowConfirm(false)}
+        />
+      )}
+
+      {showOTP && (
+        <OTPVerify
+          actionLabel={otpAction === 'delete'
+            ? `Delete sale for: ${selectedSale?.product_name}`
+            : `Edit sale for: ${pendingEditSale?.product_name}`}
+          onVerified={() => {
+            setShowOTP(false)
+            if (otpAction === 'delete') {
+              handleDelete()
+            } else {
+              handleSave(pendingEditSale)
+            }
+          }}
+          onCancel={() => setShowOTP(false)}
+        />
+      )}
+
+      {showExportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70">
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm mx-4 shadow-2xl">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
+              <h2 className="text-lg font-bold text-white">{exportType === 'excel' ? '📊 Export Excel' : '📄 Export PDF'}</h2>
+              <button onClick={() => setShowExportModal(false)} className="text-gray-400 hover:text-white text-xl">✕</button>
+            </div>
+            <div className="px-6 py-4 space-y-4">
+              <p className="text-gray-400 text-sm">Select date range. Leave blank to export all records.</p>
+              <div>
+                <label className="text-gray-400 text-sm mb-1 block">From Date</label>
+                <input type="date" value={exportFrom} onChange={(e) => setExportFrom(e.target.value)} className="w-full bg-gray-800 border border-gray-700 text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-blue-500" />
+              </div>
+              <div>
+                <label className="text-gray-400 text-sm mb-1 block">To Date</label>
+                <input type="date" value={exportTo} onChange={(e) => setExportTo(e.target.value)} className="w-full bg-gray-800 border border-gray-700 text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-blue-500" />
+              </div>
+              <div className="flex gap-3 pt-2">
+                <button onClick={() => setShowExportModal(false)} className="flex-1 py-2 bg-gray-800 text-gray-300 rounded-lg hover:bg-gray-700 transition">Cancel</button>
+                <button onClick={handleExport} className={`flex-1 py-2 text-white rounded-lg transition font-medium ${exportType === 'excel' ? 'bg-green-700 hover:bg-green-600' : 'bg-red-700 hover:bg-red-600'}`}>Download</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showReceipt && receiptSale && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70 p-4">
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm shadow-2xl max-h-full flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800 flex-shrink-0">
+              <h2 className="text-lg font-bold text-white">Sales Receipt</h2>
+              <button onClick={() => setShowReceipt(false)} className="text-gray-400 hover:text-white text-xl">✕</button>
+            </div>
+            <div className="px-6 py-4 overflow-y-auto flex-1">
+              <div className="text-center mb-4">
+                {profile?.logo_url ? (
+                  <img src={profile.logo_url} alt="Logo" className="w-12 h-12 object-contain mx-auto mb-2 rounded" />
+                ) : (
+                  <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center mx-auto mb-2">
+                    <span className="text-white font-bold">K</span>
+                  </div>
+                )}
+                <p className="text-white font-bold">{profile?.company_name || 'KoraBiz Management System'}</p>
+                {profile?.company_location && <p className="text-gray-500 text-xs">{profile.company_location}</p>}
+                <p className="text-gray-400 text-xs">Sales Receipt</p>
+              </div>
+              <div className="border-t border-gray-700 pt-4 space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-400">Date</span>
+                  <span className="text-white">{new Date(receiptSale.created_at).toLocaleDateString()}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-400">Customer</span>
+                  <span className="text-white">{receiptSale.product_name}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-400">Payment</span>
+                  <span className="text-white">
+                    {receiptSale.payment_method === 'mtn' ? '📱 MTN Mobile Money' :
+                     receiptSale.payment_method === 'bank' ? '🏦 Bank Transfer' :
+                     receiptSale.payment_method === 'cheque' ? '📄 Cheque' :
+                     receiptSale.payment_method === 'credit' ? '💳 Credit' : '💵 Cash'}
+                  </span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-400">Status</span>
+                  <span className={
+                    receiptSale.payment_status === 'pending' ? 'text-yellow-400' :
+                    receiptSale.payment_status === 'partial' ? 'text-orange-400' : 'text-green-400'
+                  }>
+                    {receiptSale.payment_status === 'pending' ? '⏳ Pending' :
+                     receiptSale.payment_status === 'partial' ? '🟠 Partial' : '✅ Paid'}
+                  </span>
+                </div>
+                {receiptSale.payment_status === 'partial' && (
+                  <>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-400">Paid So Far</span>
+                      <span className="text-white">RWF {(receiptSale.amount_paid || 0).toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-400">Balance on Credit</span>
+                      <span className="text-orange-400 font-medium">RWF {(receiptSale.total - (receiptSale.amount_paid || 0)).toLocaleString()}</span>
+                    </div>
+                  </>
+                )}
+                <div className="border-t border-gray-700 pt-2">
+                  <p className="text-gray-400 text-xs mb-2">Items:</p>
+                  {receiptItems.length > 0 ? receiptItems.map((item, i) => (
+                    <div key={i} className="mb-2">
+                      <p className="text-white text-sm">{item.product_name}</p>
+                      <div className="flex justify-between text-xs text-gray-400">
+                        <span>{item.quantity_sold} x RWF {item.selling_price?.toLocaleString()}</span>
+                        <span className="text-green-400">RWF {item.total?.toLocaleString()}</span>
+                      </div>
+                    </div>
+                  )) : (
+                    <p className="text-gray-500 text-sm">No items found</p>
+                  )}
+                </div>
+                <div className="border-t border-gray-700 pt-2 flex justify-between">
+                  <span className="text-white font-bold">GRAND TOTAL</span>
+                  <span className="text-green-400 font-bold text-lg">RWF {receiptSale.total?.toLocaleString()}</span>
+                </div>
+                {showProfit && receiptSale.extra_fees > 0 && (
+                  <>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-400">Extra Fees</span>
+                      <span className="text-red-400">- RWF {receiptSale.extra_fees.toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-400">Remaining</span>
+                      <span className="text-white font-medium">RWF {(receiptSale.total - receiptSale.extra_fees).toLocaleString()}</span>
+                    </div>
+                  </>
+                )}
+                {showProfit && receiptSale.profit !== undefined && receiptSale.profit !== null && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-400">Profit Made</span>
+                    <span className="text-purple-400 font-medium">RWF {receiptSale.profit.toLocaleString()}</span>
+                  </div>
+                )}
+              </div>
+              {(profile?.signature_url || profile?.stamp_url) && (
+                <div className="flex justify-between items-end mt-4 pt-3 border-t border-gray-700">
+                  {profile?.signature_url ? (
+                    <div className="text-center">
+                      <img src={profile.signature_url} alt="Signature" className="h-10 object-contain mx-auto" />
+                      <p className="text-gray-500 text-[10px] mt-1">Signature</p>
+                    </div>
+                  ) : <div />}
+                  {profile?.stamp_url ? (
+                    <div className="text-center">
+                      <img src={profile.stamp_url} alt="Stamp" className="h-10 object-contain mx-auto" />
+                      <p className="text-gray-500 text-[10px] mt-1">Company Stamp</p>
+                    </div>
+                  ) : <div />}
+                </div>
+              )}
+              <div className="text-center mt-4 text-gray-500 text-xs">
+                <p>Thank you for your business!</p>
+                <p>Powered by KoraBiz</p>
+              </div>
+              <div className="flex gap-3 mt-4">
+                <button onClick={() => setShowReceipt(false)} className="flex-1 py-2 bg-gray-800 text-gray-300 rounded-lg hover:bg-gray-700 transition">Close</button>
+                <button onClick={printReceipt} className="flex-1 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium">Download PDF</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showUndoToast && pendingDelete && (
+        <UndoToast
+          message="Sale deleted — stock will be restored"
+          onUndo={handleUndo}
+          onExpire={confirmDelete}
+        />
+      )}
+
+    </Layout>
+  )
+}
