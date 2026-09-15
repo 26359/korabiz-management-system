@@ -41,6 +41,9 @@ export default function ProtectedRoute({ children }) {
   }
 
   const isExpired = () => {
+    if (profile?.role === 'admin') return false
+    if (profile?.plan_type === 'lifetime') return false
+    if (subscription?.is_lifetime) return false
     if (!subscription?.expiry_date) return false
     return new Date(subscription.expiry_date) < new Date()
   }

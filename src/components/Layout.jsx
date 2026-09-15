@@ -32,7 +32,8 @@ export default function Layout({ children }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   const isAdmin = profile?.role === 'admin'
-  const navItems = isAdmin ? adminNavItems : clientNavItems
+  const isViewingAdmin = isAdmin && location.pathname.startsWith('/admin')
+  const navItems = isViewingAdmin ? adminNavItems : clientNavItems
 
   const handleLogout = async () => {
     await logout()
@@ -57,7 +58,9 @@ export default function Layout({ children }) {
               <div>
                 <span className="font-bold text-white text-sm">KoraBiz</span>
                 {isAdmin && (
-                  <span className="block text-xs text-admin-light">Admin Portal</span>
+                  <span className="block text-xs text-admin-light">
+                    {isViewingAdmin ? 'Admin Portal' : 'Store Owner'}
+                  </span>
                 )}
               </div>
             </div>
@@ -72,13 +75,36 @@ export default function Layout({ children }) {
 
         {/* Nav Items */}
         <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
+          {isAdmin && (
+            <div className="mb-3 pb-2 border-b border-surface-border">
+              {isViewingAdmin ? (
+                <button
+                  onClick={() => navigate('/dashboard')}
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 text-xs font-bold transition border border-blue-500/30"
+                  title="Switch to My Store / Business"
+                >
+                  <span>🏪</span>
+                  {sidebarOpen && <span>My Store / POS</span>}
+                </button>
+              ) : (
+                <button
+                  onClick={() => navigate('/admin')}
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 text-xs font-bold transition border border-amber-500/30"
+                  title="Switch to Admin Portal"
+                >
+                  <span>👑</span>
+                  {sidebarOpen && <span>Admin Portal</span>}
+                </button>
+              )}
+            </div>
+          )}
           {navItems.map((item) => (
             <button
               key={item.path}
               onClick={() => navigate(item.path)}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition text-sm font-medium
                 ${isActive(item.path)
-                  ? isAdmin ? 'bg-admin text-white' : 'bg-primary text-white'
+                  ? isViewingAdmin ? 'bg-admin text-white' : 'bg-primary text-white'
                   : 'text-gray-400 hover:bg-surface hover:text-white'
                 }`}
             >
@@ -143,7 +169,11 @@ export default function Layout({ children }) {
               </div>
               <div>
                 <span className="font-bold text-white text-sm">KoraBiz</span>
-                {isAdmin && <span className="block text-xs text-admin-light">Admin</span>}
+                {isAdmin && (
+                  <span className="block text-xs text-admin-light">
+                    {isViewingAdmin ? 'Admin' : 'Store Owner'}
+                  </span>
+                )}
               </div>
             </div>
             <div className="flex items-center gap-3">
@@ -155,12 +185,12 @@ export default function Layout({ children }) {
               </button>
               <span className={`text-xs px-2 py-1 rounded-full ${
                 isAdmin
-                  ? 'bg-admin text-white'
+                  ? isViewingAdmin ? 'bg-admin text-white' : 'bg-blue-600 text-white'
                   : profile?.plan_type === 'premium'
                   ? 'bg-purple-600 text-white'
                   : 'bg-primary text-white'
               }`}>
-                {isAdmin ? 'Admin' : profile?.plan_type === 'premium' ? 'Premium' : 'Standard'}
+                {isAdmin ? (isViewingAdmin ? 'Admin' : 'Owner') : profile?.plan_type === 'premium' ? 'Premium' : 'Standard'}
               </span>
               <button
                 onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
@@ -179,6 +209,27 @@ export default function Layout({ children }) {
           {/* Mobile Menu — full-width panel that drops down under the header, closes on selection */}
           {mobileMenuOpen && (
             <div className="border-t border-surface-border px-4 py-4">
+              {isAdmin && (
+                <div className="mb-4">
+                  {isViewingAdmin ? (
+                    <button
+                      onClick={() => { navigate('/dashboard'); setMobileMenuOpen(false) }}
+                      className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600/20 text-blue-400 font-bold text-sm border border-blue-500/30"
+                    >
+                      <span>🏪</span>
+                      <span>Switch to My Store / POS</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => { navigate('/admin'); setMobileMenuOpen(false) }}
+                      className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-amber-600/20 text-amber-400 font-bold text-sm border border-amber-500/30"
+                    >
+                      <span>👑</span>
+                      <span>Switch to Admin Portal</span>
+                    </button>
+                  )}
+                </div>
+              )}
               <nav className="flex flex-col divide-y divide-surface-border">
                 {navItems.map((item) => (
                   <button
@@ -186,7 +237,7 @@ export default function Layout({ children }) {
                     onClick={() => { navigate(item.path); setMobileMenuOpen(false) }}
                     className={`w-full text-left py-3 text-base font-bold uppercase tracking-wide transition ${
                       isActive(item.path)
-                        ? isAdmin ? 'text-admin-light' : 'text-primary-light'
+                        ? isViewingAdmin ? 'text-admin-light' : 'text-primary-light'
                         : 'text-white hover:text-gray-300'
                     }`}
                   >
