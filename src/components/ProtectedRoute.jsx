@@ -2,6 +2,7 @@ import { Navigate, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { supabase } from '../lib/supabase'
 import { useEffect, useState } from 'react'
+import { ADMIN_CONFIG } from '../config/adminConfig'
 
 export default function ProtectedRoute({ children }) {
   const { user, profile, loading } = useAuth()
@@ -124,7 +125,7 @@ export default function ProtectedRoute({ children }) {
           <div className="bg-yellow-900 border border-yellow-700 rounded-xl p-4 mb-6 text-left">
             <p className="text-yellow-300 font-bold mb-2">How to renew:</p>
             <p className="text-yellow-200 text-sm">1. Send payment via MTN Mobile Money</p>
-            <p className="text-yellow-200 text-sm">2. Number: <strong className="text-white">0785422754</strong></p>
+            <p className="text-yellow-200 text-sm">2. Number: <strong className="text-white">{ADMIN_CONFIG.momoNumber} ({ADMIN_CONFIG.momoAccountName})</strong></p>
             <p className="text-yellow-200 text-sm">3. Amount: <strong className="text-white">
               RWF {subscription?.plan_type === 'premium' ? '50,000' : '25,000'}
             </strong></p>

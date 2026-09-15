@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { useNavigate } from 'react-router-dom'
+import { ADMIN_CONFIG } from '../config/adminConfig'
 
 export default function ChoosePlan() {
   const { profile } = useAuth()
@@ -134,8 +135,8 @@ export default function ChoosePlan() {
           </p>
           <div className="bg-gray-800 border border-gray-700 rounded-xl p-4 mb-6 text-left space-y-2">
             <p className="text-white font-bold text-sm">Need quick access? Contact us:</p>
-            <p className="text-gray-300 text-sm">📧 <a href="mailto:nixonngoga@gmail.com" className="text-blue-400 hover:text-blue-300">nixonngoga@gmail.com</a></p>
-            <p className="text-gray-300 text-sm">📱 <a href="tel:+250785422754" className="text-blue-400 hover:text-blue-300">+250 785 422 754</a></p>
+            <p className="text-gray-300 text-sm">📧 <a href={`mailto:${ADMIN_CONFIG.supportEmail}`} className="text-blue-400 hover:text-blue-300">{ADMIN_CONFIG.supportEmail}</a></p>
+            <p className="text-gray-300 text-sm">📱 <a href={`tel:${ADMIN_CONFIG.supportPhone.replace(/\s+/g, '')}`} className="text-blue-400 hover:text-blue-300">{ADMIN_CONFIG.supportPhone}</a></p>
           </div>
           <button
             onClick={() => navigate('/login')}
@@ -159,8 +160,8 @@ export default function ChoosePlan() {
           </p>
           <div className="bg-gray-800 border border-gray-700 rounded-xl p-4 mb-4 text-left space-y-2">
             <p className="text-white font-bold text-sm">Need quick access? Contact us:</p>
-            <p className="text-gray-300 text-sm">📧 <a href="mailto:nixonngoga@gmail.com" className="text-blue-400 hover:text-blue-300">nixonngoga@gmail.com</a></p>
-            <p className="text-gray-300 text-sm">📱 <a href="tel:+250785422754" className="text-blue-400 hover:text-blue-300">+250 785 422 754</a></p>
+            <p className="text-gray-300 text-sm">📧 <a href={`mailto:${ADMIN_CONFIG.supportEmail}`} className="text-blue-400 hover:text-blue-300">{ADMIN_CONFIG.supportEmail}</a></p>
+            <p className="text-gray-300 text-sm">📱 <a href={`tel:${ADMIN_CONFIG.supportPhone.replace(/\s+/g, '')}`} className="text-blue-400 hover:text-blue-300">{ADMIN_CONFIG.supportPhone}</a></p>
           </div>
           <div className="bg-gray-800 rounded-xl p-4 mb-6 text-left">
             <p className="text-gray-400 text-sm">Plan: <span className="text-white font-medium capitalize">{selectedPlan.name}</span></p>
@@ -314,7 +315,7 @@ export default function ChoosePlan() {
             <div className="space-y-3">
               {[
                 'Open your MTN Mobile Money app or dial *182#',
-                `Send RWF ${selectedPlan.price.toLocaleString()} to number: 0785422754`,
+                `Send RWF ${selectedPlan.price.toLocaleString()} to number: ${ADMIN_CONFIG.momoNumber} (${ADMIN_CONFIG.momoAccountName})`,
                 'Use your full name as the payment reference',
                 'Copy the transaction ID from your SMS and fill in below',
               ].map((step, i) => (
