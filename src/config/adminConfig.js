@@ -4,8 +4,7 @@
 export const ADMIN_CONFIG = {
   businessName: import.meta.env.VITE_BUSINESS_NAME || 'KoraBiz Management System',
   supportEmail: import.meta.env.VITE_ADMIN_EMAIL || 'support@korabiz.com',
-  supportPhone: import.meta.env.VITE_ADMIN_PHONE || '+250 780 000 000',
-  momoNumber: import.meta.env.VITE_ADMIN_MOMO_NUMBER || '0780000000',
+  supportPhone: import.meta.env.VITE_ADMIN_PHONE || '+250 786 357 850',
+  momoNumber: import.meta.env.VITE_ADMIN_MOMO_NUMBER || '0786357850',
   momoAccountName: import.meta.env.VITE_ADMIN_MOMO_NAME || 'KoraBiz Admin',
 }
-
